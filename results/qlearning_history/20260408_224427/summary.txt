@@ -1,0 +1,7 @@
+=== Summary ===
+Estimated convergence episode: 105
+Final greedy actions: [0, 1, 0, 1, 0, 0]
+Final greedy reward: 1002
+
+[Interpretation]
+History was added to the state representation for Q-learning.

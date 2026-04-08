@@ -1,0 +1,3 @@
+=== Greedy policy result ===
+Actions taken: [0, 1, 0, 1, 0, 0]
+Total reward: 1002
