@@ -1,7 +1,0 @@
-=== Summary ===
-Estimated convergence episode: 105
-Final greedy actions: [1, 1, 1, 1, 1, 1]
-Final greedy reward: 6
-
-[Interpretation]
-If greedy reward is far below 1002, the learned policy did not reach the desired pattern.

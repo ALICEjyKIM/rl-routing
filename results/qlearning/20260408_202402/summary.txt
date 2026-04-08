@@ -1,7 +1,0 @@
-=== Summary ===
-Estimated convergence episode: 105
-Final greedy actions: [1, 1, 1, 1, 1, 1]
-Final greedy reward: 6
-
-[Interpretation]
-If greedy reward is close to 1002, Q-learning found the desired high-reward pattern.
