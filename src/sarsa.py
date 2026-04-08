@@ -1,380 +1,199 @@
-import os
-import csv
-import random
-from datetime import datetime
-
+import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from collections import defaultdict
 
 
-class ChainEnv:
-    """
-    source 기반 환경
-    states: x1 -> x2 -> x3 -> x4 -> x5 -> x6
-    actions: 0, 1
-    transition: deterministic (다음 상태로 한 칸 이동)
+# -------------------------------------------------
+# basic setting
+# -------------------------------------------------
+state_names = ['x1', 'x2', 'x3', 'x4', 'x5', 'x6']
+action_space = [0, 1]
 
-    reward:
-        if action == 1:
-            reward = 1
-        elif action == 0:
-            if current_state == x6 and prev_actions == [0, 1, 0, 1, 0]:
-                reward = 1000
-            else:
-                reward = 0
+goal_prefix = [0, 1, 0, 1, 0]
+goal_sequence = [0, 1, 0, 1, 0, 0]
 
-    주의:
-    마지막 상태 x6에서 action을 한 번 더 선택하는 구조로 해석하면,
-    그 전에 누적된 5개의 action 패턴을 보고 최종 보상을 주는 형태가 된다.
-    """
+alpha = 0.1
+gamma = 0.99
 
-    def __init__(self):
-        self.num_states = 6
-        self.num_actions = 2
-        self.reset()
+epsilon = 0.3
+epsilon_decay = 0.995
+epsilon_min = 0.01
 
-    def reset(self):
-        self.state = 0   # x1 -> index 0
-        self.prev_actions = []
-        self.done = False
-        return self.state
-
-    def step(self, action):
-        if self.done:
-            raise ValueError("Episode is done. Call reset().")
-
-        current_state = self.state
-        reward = 0
-
-        # 마지막 상태 x6에서의 행동
-        if current_state == 5:
-            if action == 1:
-                reward = 1
-            else:
-                if self.prev_actions == [0, 1, 0, 1, 0]:
-                    reward = 1000
-                else:
-                    reward = 0
-
-            self.done = True
-            next_state = current_state
-            return next_state, reward, self.done
-
-        # x1 ~ x5 에서의 행동
-        if action == 1:
-            reward = 1
-        else:
-            reward = 0
-
-        self.prev_actions.append(action)
-        self.state += 1
-        next_state = self.state
-
-        return next_state, reward, self.done
+num_episodes = 5000
 
 
-def epsilon_greedy(Q, state, epsilon):
-    if random.random() < epsilon:
-        return random.randint(0, Q.shape[1] - 1)
-    return int(torch.argmax(Q[state]).item())
+# -------------------------------------------------
+# environment-related functions
+# -------------------------------------------------
+def terminal(pos):
+    return pos == len(state_names) - 1
 
 
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
+def state_to_key(pos, history):
+    return (pos, tuple(history))
 
 
-def moving_average(values, window):
-    if len(values) < window:
-        return []
-    result = []
-    for i in range(len(values) - window + 1):
-        result.append(sum(values[i:i + window]) / window)
-    return result
+def reward_function(pos, action, history):
+    current_state = state_names[pos]
+
+    if action == 1:
+        return 1
+
+    if current_state == 'x6' and list(history) == goal_prefix:
+        return 1000
+
+    return 0
 
 
-def estimate_convergence(episode_rewards, window=100, tolerance=1e-3):
-    """
-    최근 window 구간 평균 reward의 변화가 tolerance보다 작아지는
-    첫 시점을 대략적인 수렴 시점으로 본다.
-    """
-    if len(episode_rewards) < 2 * window:
-        return None
-
-    ma = moving_average(episode_rewards, window)
-    for i in range(1, len(ma)):
-        if abs(ma[i] - ma[i - 1]) < tolerance:
-            return i + window
-    return None
+# -------------------------------------------------
+# Q storage
+# -------------------------------------------------
+Q = defaultdict(lambda: torch.zeros(len(action_space), dtype=torch.float32))
 
 
-def train_sarsa(
-    num_episodes=10000,
-    alpha=0.1,
-    gamma=0.99,
-    epsilon=1.0,
-    epsilon_decay=0.9995,
-    epsilon_min=0.01,
-    seed=42,
-    snapshot_interval=100
-):
-    random.seed(seed)
-    torch.manual_seed(seed)
-
-    env = ChainEnv()
-
-    # Q-table: [num_states, num_actions]
-    Q = torch.zeros((env.num_states, env.num_actions), dtype=torch.float32)
-
-    episode_rewards = []
-    epsilon_history = []
-    episode_log_rows = []
-    q_snapshot_rows = []
-
-    for episode in range(1, num_episodes + 1):
-        state = env.reset()
-        action = epsilon_greedy(Q, state, epsilon)
-
-        total_reward = 0
-        step_count = 0
-
-        while True:
-            next_state, reward, done = env.step(action)
-            total_reward += reward
-            step_count += 1
-
-            if done:
-                td_target = reward
-                td_error = td_target - Q[state, action]
-                Q[state, action] = Q[state, action] + alpha * td_error
-                break
-
-            next_action = epsilon_greedy(Q, next_state, epsilon)
-
-            # SARSA update
-            td_target = reward + gamma * Q[next_state, next_action]
-            td_error = td_target - Q[state, action]
-            Q[state, action] = Q[state, action] + alpha * td_error
-
-            state = next_state
-            action = next_action
-
-        episode_rewards.append(total_reward)
-        epsilon_history.append(epsilon)
-        episode_log_rows.append([episode, total_reward, epsilon, step_count])
-
-        if episode % snapshot_interval == 0 or episode == 1 or episode == num_episodes:
-            for s in range(Q.shape[0]):
-                q_snapshot_rows.append([
-                    episode,
-                    f"x{s+1}",
-                    float(Q[s, 0].item()),
-                    float(Q[s, 1].item())
-                ])
-
-        epsilon = max(epsilon_min, epsilon * epsilon_decay)
-
-    return Q, episode_rewards, epsilon_history, episode_log_rows, q_snapshot_rows
+def prepare_state(key):
+    if key not in Q:
+        Q[key] = torch.ones(len(action_space), dtype=torch.float32) * 5.0
 
 
-def evaluate_policy(Q):
-    env = ChainEnv()
-    state = env.reset()
-    actions_taken = []
-    total_reward = 0
+def epsilon_greedy(key, eps):
+    prepare_state(key)
+
+    if np.random.rand() < eps:
+        return np.random.choice(action_space)
+
+    return torch.argmax(Q[key]).item()
+
+
+# -------------------------------------------------
+# logs
+# -------------------------------------------------
+episode_rewards = []
+episode_td_means = []
+episode_value_means = []
+success_history = []
+
+
+# -------------------------------------------------
+# training
+# -------------------------------------------------
+for episode in range(num_episodes):
+    pos = 0
+    action_history = []
+
+    current_key = state_to_key(pos, action_history)
+    current_action = epsilon_greedy(current_key, epsilon)
+
+    total_reward = 0.0
+    td_list = []
+    visited = set()
+    success = 0
 
     while True:
-        action = int(torch.argmax(Q[state]).item())
-        actions_taken.append(action)
+        visited.add(current_key)
 
-        next_state, reward, done = env.step(action)
+        reward = reward_function(pos, current_action, action_history)
         total_reward += reward
 
-        if done:
+        next_history = action_history + [current_action]
+
+        if terminal(pos):
+            target = torch.tensor(float(reward))
+            error = target - Q[current_key][current_action]
+            Q[current_key][current_action] += alpha * error
+            td_list.append(error.item())
+
+            if next_history == goal_sequence:
+                success = 1
             break
 
-        state = next_state
+        next_pos = pos + 1
+        next_key = state_to_key(next_pos, next_history)
+        next_action = epsilon_greedy(next_key, epsilon)
 
-    return actions_taken, total_reward
+        prepare_state(next_key)
 
+        # SARSA update
+        target = reward + gamma * Q[next_key][next_action]
+        error = target - Q[current_key][current_action]
+        Q[current_key][current_action] += alpha * error
+        td_list.append(error.item())
 
-def save_episode_log(log_rows, save_path):
-    with open(save_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["episode", "total_reward", "epsilon", "steps"])
-        writer.writerows(log_rows)
+        pos = next_pos
+        action_history = next_history
+        current_key = next_key
+        current_action = next_action
 
+    episode_rewards.append(total_reward)
+    episode_td_means.append(float(np.mean(td_list)))
+    episode_value_means.append(np.mean([torch.max(Q[k]).item() for k in visited]))
+    success_history.append(success)
 
-def save_q_snapshot(snapshot_rows, save_path):
-    with open(save_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["episode", "state", "Q_action_0", "Q_action_1"])
-        writer.writerows(snapshot_rows)
+    epsilon = max(epsilon_min, epsilon * epsilon_decay)
 
-
-def save_q_table(Q, save_path):
-    with open(save_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["state", "Q_action_0", "Q_action_1", "best_action", "best_q"])
-        for s in range(Q.shape[0]):
-            q0 = float(Q[s, 0].item())
-            q1 = float(Q[s, 1].item())
-            best_action = int(torch.argmax(Q[s]).item())
-            best_q = float(torch.max(Q[s]).item())
-            writer.writerow([f"x{s+1}", q0, q1, best_action, best_q])
-
-
-def save_policy_text(actions, total_reward, Q, save_path):
-    with open(save_path, "w", encoding="utf-8") as f:
-        f.write("=== Greedy policy result ===\n")
-        f.write(f"Actions taken: {actions}\n")
-        f.write(f"Total reward: {total_reward}\n\n")
-
-        f.write("=== Greedy action by state ===\n")
-        for s in range(Q.shape[0]):
-            best_action = int(torch.argmax(Q[s]).item())
-            q_values = Q[s].tolist()
-            f.write(f"x{s+1}: best action = {best_action}, Q = {q_values}\n")
-
-
-def plot_reward_curve(rewards, save_path, ma_window=100):
-    plt.figure(figsize=(8, 5))
-    plt.plot(range(1, len(rewards) + 1), rewards, label="Episode reward")
-
-    ma = moving_average(rewards, ma_window)
-    if ma:
-        plt.plot(
-            range(ma_window, len(rewards) + 1),
-            ma,
-            label=f"Moving average ({ma_window})"
+    if episode % 200 == 0 or episode == num_episodes - 1:
+        print(
+            f"[SARSA] episode {episode:4d} | "
+            f"reward {total_reward:7.1f} | "
+            f"td {episode_td_means[-1]:8.4f} | "
+            f"value {episode_value_means[-1]:8.2f} | "
+            f"success {sum(success_history):4d} | "
+            f"eps {epsilon:.4f}"
         )
 
-    plt.xlabel("Episode")
-    plt.ylabel("Total Reward")
-    plt.title("SARSA Reward Curve")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+
+# -------------------------------------------------
+# check learned greedy sequence
+# -------------------------------------------------
+def run_greedy_policy():
+    pos = 0
+    history = []
+    chosen = []
+    total = 0.0
+
+    while True:
+        key = state_to_key(pos, history)
+        prepare_state(key)
+
+        action = torch.argmax(Q[key]).item()
+        chosen.append(action)
+
+        total += reward_function(pos, action, history)
+        history = history + [action]
+
+        if terminal(pos):
+            break
+
+        pos += 1
+
+    return chosen, total
 
 
-def plot_epsilon_curve(epsilon_history, save_path):
-    plt.figure(figsize=(8, 5))
-    plt.plot(range(1, len(epsilon_history) + 1), epsilon_history)
-    plt.xlabel("Episode")
-    plt.ylabel("Epsilon")
-    plt.title("Epsilon Decay")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+best_sequence, best_reward = run_greedy_policy()
+
+print("\n=== SARSA result ===")
+print("target sequence :", goal_sequence)
+print("learned sequence:", best_sequence)
+print("greedy reward   :", best_reward)
+print("success count   :", sum(success_history))
 
 
-def plot_q_value_by_state(q_snapshot_rows, save_path):
-    """
-    state별로 episode에 따라 Q(s,0), Q(s,1)이 어떻게 변하는지 한 그래프에 저장
-    """
-    state_dict = {}
-    for row in q_snapshot_rows:
-        episode, state, q0, q1 = row
-        if state not in state_dict:
-            state_dict[state] = {"episode": [], "q0": [], "q1": []}
-        state_dict[state]["episode"].append(episode)
-        state_dict[state]["q0"].append(q0)
-        state_dict[state]["q1"].append(q1)
+# -------------------------------------------------
+# visualization
+# -------------------------------------------------
+plt.figure(figsize=(8, 5))
+plt.plot(episode_rewards)
+plt.title("SARSA - Episode Reward")
+plt.xlabel("Episode")
+plt.ylabel("Reward")
+plt.grid(True)
+plt.show()
 
-    plt.figure(figsize=(10, 6))
-    for state in sorted(state_dict.keys()):
-        plt.plot(state_dict[state]["episode"], state_dict[state]["q0"], label=f"{state}-a0")
-        plt.plot(state_dict[state]["episode"], state_dict[state]["q1"], linestyle="--", label=f"{state}-a1")
-
-    plt.xlabel("Episode")
-    plt.ylabel("Q value")
-    plt.title("Q-value Change by State")
-    plt.legend(ncol=2, fontsize=8)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
-
-
-if __name__ == "__main__":
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_dir = os.path.join("..", "results", "sarsa", timestamp)
-    ensure_dir(result_dir)
-
-    Q, rewards, epsilon_history, episode_log_rows, q_snapshot_rows = train_sarsa(
-        num_episodes=10000,
-        alpha=0.1,
-        gamma=0.99,
-        epsilon=1.0,
-        epsilon_decay=0.9995,
-        epsilon_min=0.01,
-        seed=42,
-        snapshot_interval=100
-    )
-
-    best_actions, best_reward = evaluate_policy(Q)
-    conv_episode = estimate_convergence(rewards, window=100, tolerance=1e-3)
-
-    print("=== Learned Q-table ===")
-    print(Q)
-
-    print("\n=== Greedy policy result ===")
-    print("Actions taken:", best_actions)
-    print("Total reward:", best_reward)
-
-    print("\n=== Greedy action by state ===")
-    for s in range(Q.shape[0]):
-        print(f"x{s+1}: best action = {int(torch.argmax(Q[s]).item())}, Q = {Q[s].tolist()}")
-
-    print("\n=== Convergence estimate ===")
-    print("Estimated convergence episode:", conv_episode)
-
-    save_episode_log(
-        episode_log_rows,
-        os.path.join(result_dir, "episode_log.csv")
-    )
-
-    save_q_snapshot(
-        q_snapshot_rows,
-        os.path.join(result_dir, "q_snapshot.csv")
-    )
-
-    save_q_table(
-        Q,
-        os.path.join(result_dir, "q_table_final.csv")
-    )
-
-    save_policy_text(
-        best_actions,
-        best_reward,
-        Q,
-        os.path.join(result_dir, "policy_log.txt")
-    )
-
-    with open(os.path.join(result_dir, "summary.txt"), "w", encoding="utf-8") as f:
-        f.write("=== Summary ===\n")
-        f.write(f"Estimated convergence episode: {conv_episode}\n")
-        f.write(f"Final greedy actions: {best_actions}\n")
-        f.write(f"Final greedy reward: {best_reward}\n")
-        f.write("\n[Interpretation]\n")
-        f.write("If greedy reward is far below 1002, the learned policy did not reach the desired pattern.\n")
-
-    plot_reward_curve(
-        rewards,
-        os.path.join(result_dir, "reward_curve.png"),
-        ma_window=100
-    )
-
-    plot_epsilon_curve(
-        epsilon_history,
-        os.path.join(result_dir, "epsilon_curve.png")
-    )
-
-    plot_q_value_by_state(
-        q_snapshot_rows,
-        os.path.join(result_dir, "q_value_by_state.png")
-    )
-
-    print("\nSaved logs and plots to:", result_dir)
+plt.figure(figsize=(8, 5))
+plt.plot(episode_value_means)
+plt.title("SARSA - Mean Value")
+plt.xlabel("Episode")
+plt.ylabel("Mean max Q")
+plt.grid(True)
+plt.show()
