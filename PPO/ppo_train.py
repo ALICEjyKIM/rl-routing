@@ -182,10 +182,15 @@ def train():
             value_loss = F.mse_loss(new_values.view(-1), returns)
             loss = actor_loss + value_coef * value_loss - entropy_coef * entropy
 
+            # 이전 gradient 초기화
             optimizer.zero_grad()
+            # actor, critic 쪽 파라미터가 각 loss에 따라 얼마나 바뀌어야 하는지 계산
+            # PyTorch에서는 total loss 하나로 backward를 한 번 호출해도 actor/critic 양쪽에 각각 gradient가 계산됨
             loss.backward()
+            # 계산된 gradient를 이용해 실제 actor/critic 파라미터 업데이트
             optimizer.step()
 
+            # 기록용
             last_actor_loss = actor_loss.item()
             last_value_loss = value_loss.item()
             last_entropy = entropy.item()
