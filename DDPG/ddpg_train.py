@@ -83,19 +83,19 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-    def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+    def push(self, state, action, reward, next_state, terminated):
+        self.buffer.append((state, action, reward, next_state, terminated))
 
     def sample(self, size, device):
         batch = random.sample(self.buffer, size)
-        states, actions, rewards, next_states, dones = map(np.array, zip(*batch))
+        states, actions, rewards, next_states, terminals = map(np.array, zip(*batch))
 
         return (
             torch.as_tensor(states, dtype=torch.float32, device=device),
             torch.as_tensor(actions, dtype=torch.float32, device=device),
             torch.as_tensor(rewards, dtype=torch.float32, device=device).unsqueeze(1),
             torch.as_tensor(next_states, dtype=torch.float32, device=device),
-            torch.as_tensor(dones, dtype=torch.float32, device=device).unsqueeze(1),
+            torch.as_tensor(terminals, dtype=torch.float32, device=device).unsqueeze(1),
         )
 
 
@@ -188,21 +188,25 @@ def train():
                 action = torch.clamp(action + noise, action_low, action_high)
                 env_action = action.cpu().numpy()
 
+            # Gymnasium separates natural terminal states from time-limit truncation.
+            # Stop the episode on either one, but only mask bootstrapping on terminated.
             next_state, reward, terminated, truncated, _ = env.step(env_action)
-            done = terminated or truncated
-            replay_buffer.push(state, env_action, reward, next_state, done)
+            episode_done = terminated or truncated
+            replay_buffer.push(state, env_action, reward, next_state, terminated)
 
             state = next_state
             episode_reward += reward
             total_steps += 1
 
             if len(replay_buffer) >= batch_size:
-                states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size, device)
+                states, actions, rewards, next_states, terminals = replay_buffer.sample(batch_size, device)
 
                 with torch.no_grad():
                     next_actions = target_actor(next_states)
                     target_q = target_critic(next_states, next_actions)
-                    q_target = rewards + gamma * (1.0 - dones) * target_q
+                    # If an episode was only truncated by a time limit, keep bootstrapping
+                    # from next_state. True terminal states should stop the target.
+                    q_target = rewards + gamma * (1.0 - terminals) * target_q
 
                 q_value = critic(states, actions)
                 critic_loss = F.mse_loss(q_value, q_target)
@@ -223,7 +227,7 @@ def train():
                 last_actor_loss = actor_loss.item()
                 last_critic_loss = critic_loss.item()
 
-            if done:
+            if episode_done:
                 break
 
         noise_std = max(noise_std_min, noise_std * noise_decay)
