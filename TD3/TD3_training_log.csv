@@ -1,0 +1,4 @@
+episode,avg_reward,best_reward,actor_loss,critic_loss,exploration_noise
+0,-144.8,-inf,0.000,0.000,0.199
+100,-114.1,-101.3,12.864,6.582,0.121
+200,93.8,105.2,3.871,7.692,0.073
