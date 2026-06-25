@@ -79,6 +79,7 @@ max  sum_p sum_s sum_k (b_p - a_sp - c_k) q_spk
 - 화주 지급가격은 SKU별 최소 수용가격 `a_sp` 이상이어야 한다.
 - 플랫폼 마진은 운송 및 fulfillment 비용을 차감한 뒤 음수가 되지 않아야 한다.
 - 부분 이행 주문은 실제 이행 수량과 SKU별 충족률을 반영해 정산한다.
+- 현재 모형에서 가격은 최적화 과정에서 내생적으로 결정되는 의사결정변수가 아니라, 매칭 결과에 적용되는 사후 정산 규칙이다.
 
 따라서 특정 조합 `(s, p, k)`가 거래 가능하려면 기본적으로 다음 조건이 필요하다.
 
@@ -86,6 +87,27 @@ b_p >= a_sp + c_k
 
 
 이 조건을 만족하지 않는 조합은 가격 측면에서 거래가 성립하기 어렵다.
+
+거래가 성립하면 단위 surplus는 다음과 같이 정의한다.
+
+unit_surplus = b_p - a_sp - c_k
+
+이 surplus는 단순히 플랫폼이 전부 가져가는 값이 아니라, 플랫폼 생태계에 참여하는 주체들이 거래 성과를 체감하도록 배분된다. 현재 정산 규칙은 플랫폼, 화주, 수하주가 surplus를 `4 : 3 : 3` 비율로 공유하는 구조를 사용한다.
+
+platform_surplus_share = 0.4
+seller_surplus_share   = 0.3
+buyer_surplus_share    = 0.3
+
+이에 따라 실제 정산 단가는 다음과 같이 계산된다.
+
+buyer_payment_price = b_p - buyer_surplus_share * unit_surplus
+seller_payment_price = a_sp + seller_surplus_share * unit_surplus
+platform_unit_profit = buyer_payment_price - seller_payment_price - c_k
+
+
+이 구조에서 구매자는 최대 지불의향보다 낮은 가격으로 구매해 절감 효과를 얻고, 화주는 최소 수용가격보다 높은 지급가격을 받아 추가 이익을 얻으며, 플랫폼은 매칭·운영·리스크 관리에 대한 보상으로 surplus의 일부를 확보한다.
+
+따라서 `4 : 3 : 3` 정산 규칙은 사회적 후생 자체를 증가시키는 장치라기보다는, 이미 발생한 surplus를 플랫폼, 화주, 수하주가 나누어 갖게 함으로써 참여자의 플랫폼 잔류와 재참여 유인을 높이는 장치로 해석한다. 고정된 매칭 결과에서 사회적 후생 총량은 `unit_surplus`로 동일하지만, 배분 규칙은 각 주체가 거래에서 체감하는 이익과 장기 참여 가능성에 영향을 준다.
 
 ## 순차 처리 흐름
 
@@ -114,4 +136,3 @@ pip install "gymnasium[box2d]"
 MILP baseline을 실행하려면 Gurobi와 `gurobipy`가 필요하다.
 
 pip install gurobipy
-
