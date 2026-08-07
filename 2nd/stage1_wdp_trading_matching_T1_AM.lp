@@ -1,6 +1,5 @@
 \ Model stage1_wdp_trading_matching_T1_AM
 \ LP format - for model browsing. Use MPS format to capture full model detail.
-\ Signature: 0xc737fb30f09337b4
 Maximize
   1970 q[O1,S1,P1] + 1650 q[O1,S2,P1] + 2110 q[O1,S3,P1] + 1776 q[O1,S1,P2]
    + 1960 q[O1,S4,P2] + 1750 q[O2,S1,P1] + 1465 q[O2,S2,P1]
